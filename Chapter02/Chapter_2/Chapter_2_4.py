@@ -1,8 +1,8 @@
 from os import system, name
 import time
-import gym
+import gymnasium as gym
 import numpy as np
-env = gym.make('FrozenLake-v0')
+env = gym.make('FrozenLake-v1', render_mode='ansi')
 env.reset()
 
 def clear():
@@ -13,7 +13,9 @@ def clear():
 
 for _ in range(1000):
     clear()
-    env.render()
+    print(env.render())
     time.sleep(.5)
-    env.step(env.action_space.sample()) # take a random action
+    observation, reward, terminated, truncated, info = env.step(env.action_space.sample()) # take a random action
+    if terminated or truncated:
+        env.reset()
 env.close()

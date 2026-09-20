@@ -1,8 +1,8 @@
 from os import system, name
 import time
-import gym
+import gymnasium as gym
 import numpy as np
-env = gym.make('FrozenLake-v0')
+env = gym.make('FrozenLake-v1')
 env.reset()
 
 def clear():
@@ -18,37 +18,37 @@ def act(V, env, gamma, policy, state, v):
             V[state] = v
             
 def evaluate(V, action_values, env, gamma, state):
-    for action in range(env.nA):
+    for action in range(env.action_space.n):
         for prob, next_state, reward, terminated in env.P[state][action]:
             action_values[action] += prob * (reward + gamma * V[next_state])
     return action_values
 
 def lookahead(env, state, V, gamma):
-    action_values = np.zeros(env.nA)
+    action_values = np.zeros(env.action_space.n)
     return evaluate(V, action_values, env, gamma, state)
 
 def improve_policy(env, gamma=1.0, terms=1e9):    
-    policy = np.ones([env.nS, env.nA]) / env.nA
+    policy = np.ones([env.observation_space.n, env.action_space.n]) / env.action_space.n
     evals = 1
     for i in range(int(terms)):
         stable = True       
         V = eval_policy(policy, env, gamma=gamma)
-        for state in range(env.nS):
+        for state in range(env.observation_space.n):
             current_action = np.argmax(policy[state])
             action_value = lookahead(env, state, V, gamma)
             best_action = np.argmax(action_value)
             if current_action != best_action:
                 stable = False                
-                policy[state] = np.eye(env.nA)[best_action]
+                policy[state] = np.eye(env.action_space.n)[best_action]
             evals += 1                
             if stable:
                 return policy, V
 
 def eval_policy(policy, env, gamma=1.0, theta=1e-5, terms=1e9):     
-    V = np.zeros(env.nS)  
+    V = np.zeros(env.observation_space.n)  
     delta = 0
     for i in range(int(terms)): 
-        for state in range(env.nS):            
+        for state in range(env.observation_space.n):            
             act(V, env, gamma, policy, state, v=0.0)         
         clear()
         print(V)
@@ -61,17 +61,17 @@ def eval_policy(policy, env, gamma=1.0, theta=1e-5, terms=1e9):
     return V
 
 def value_iteration(env, gamma=1.0, theta=1e-9, terms=1e9):
-    V = np.zeros(env.nS)
+    V = np.zeros(env.observation_space.n)
     for i in range(int(terms)):
         delta = 0
-        for state in range(env.nS):
+        for state in range(env.observation_space.n):
             action_value = lookahead(env, state, V, gamma)
             best_action_value = np.max(action_value)
             delta = max(delta, np.abs(V[state] - best_action_value))
             V[state] = best_action_value             
         if delta < theta: break
-    policy = np.zeros([env.nS, env.nA])
-    for state in range(env.nS):
+    policy = np.zeros([env.observation_space.n, env.action_space.n])
+    for state in range(env.observation_space.n):
         action_value = lookahead(env, state, V, gamma)
         best_action = np.argmax(action_value)
         policy[state, best_action] = 1.0
@@ -82,10 +82,11 @@ def play(env, episodes, policy):
     total_reward = 0
     for episode in range(episodes):
         term = False
-        state = env.reset()
+        state, _ = env.reset()
         while not term:
             action = np.argmax(policy[state])
-            next_state, reward, term, info = env.step(action)
+            next_state, reward, terminated, truncated, info = env.step(action)
+            term = terminated or truncated
             total_reward += reward
             state = next_state
             if term and reward == 1.0:
@@ -93,16 +94,16 @@ def play(env, episodes, policy):
     average_reward = total_reward / episodes
     return wins, total_reward, average_reward
 
-policy, V = improve_policy(env.env)
+policy, V = improve_policy(env.unwrapped)
 print(policy, V)
 
-wins, total, avg = play(env.env, 1000, policy)
+wins, total, avg = play(env, 1000, policy)
 print(wins)
 
-policy, V = value_iteration(env.env)
+policy, V = value_iteration(env.unwrapped)
 print(policy, V)
 
-wins, total, avg = play(env.env, 1000, policy)
+wins, total, avg = play(env, 1000, policy)
 print(wins)
 
 
