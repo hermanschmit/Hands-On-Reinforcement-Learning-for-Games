@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 import matplotlib.pyplot as plt
 
-import gym
+import gymnasium as gym
 import numpy as np
 
 from collections import deque
@@ -36,6 +36,7 @@ env_id = 'PongNoFrameskip-v4'
 env    = make_atari(env_id)
 env    = wrap_deepmind(env)
 env    = wrap_pytorch(env)
+show_env = wrap_pytorch(wrap_deepmind(make_atari(env_id, render_mode='human')))
 
 #epsilon_start = 1.0
 #epsilon_final = 0.01
@@ -51,6 +52,7 @@ epsilon_by_episode = lambda episode: epsilon_final + (epsilon_start - epsilon_fi
 
 buffer_size = 100000
 neurons = 192
+play_every = 25
 
 #plt.plot([eps_by_episode(i) for i in range(10000)])
 plt.plot([epsilon_by_episode(i) for i in range(1000000)])
@@ -90,9 +92,10 @@ class CnnDQN(nn.Module):
     
     def act(self, state, epsilon):
         if random.random() > epsilon:
-            state   = autograd.Variable(torch.FloatTensor(np.float32(state)).unsqueeze(0), volatile=True)
-            q_value = self.forward(state)
-            action  = q_value.max(1)[1].data[0]
+            state   = autograd.Variable(torch.FloatTensor(np.float32(state)).unsqueeze(0))
+            with torch.no_grad():
+                q_value = self.forward(state)
+            action  = q_value.max(1)[1].item()
         else:
             action = random.randrange(env.action_space.n)
         return action
@@ -112,13 +115,14 @@ def compute_td_loss(batch_size):
     state, action, reward, next_state, done = replay_buffer.sample(batch_size)
 
     state      = autograd.Variable(torch.FloatTensor(np.float32(state)))
-    next_state = autograd.Variable(torch.FloatTensor(np.float32(next_state)), volatile=True)
+    next_state = autograd.Variable(torch.FloatTensor(np.float32(next_state)))
     action     = autograd.Variable(torch.LongTensor(action))
     reward     = autograd.Variable(torch.FloatTensor(reward))
     done       = autograd.Variable(torch.FloatTensor(done))
 
     q_values      = model(state)
-    next_q_values = model(next_state)
+    with torch.no_grad():
+        next_q_values = model(next_state)
 
     q_value          = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
     next_q_value     = next_q_values.max(1)[0]
@@ -145,11 +149,11 @@ def plot(episode, rewards, losses):
 
 def play_game():
     done = False
-    state = env.reset()
+    state, _ = show_env.reset()
     while(not done):
         action = model.act(state, epsilon_final)
-        next_state, reward, done, _ = env.step(action)
-        env.render()
+        next_state, reward, terminated, truncated, _ = show_env.step(action)
+        done = terminated or truncated
         state = next_state
 
 episodes = 1400000
@@ -160,7 +164,7 @@ losses = []
 all_rewards = []
 episode_reward = 0
 
-state = env.reset()
+state, _ = env.reset()
 tot_reward = 0
 tr = trange(episodes+1, desc='Agent training', leave=True)
 
@@ -171,7 +175,8 @@ for episode in tr:
     epsilon = epsilon_by_episode(episode)    
     action = model.act(state, epsilon)
     
-    next_state, reward, done, _ = env.step(action) 
+    next_state, reward, terminated, truncated, _ = env.step(action)
+    done = terminated or truncated
     replay_buffer.push(state, action, reward, next_state, done)
 
     tot_reward += reward
@@ -179,9 +184,9 @@ for episode in tr:
     episode_reward += reward
     
     if done:
-        if episode > replay_start:
+        if episode > replay_start and len(all_rewards) % play_every == 0:
             play_game()
-        state = env.reset()
+        state, _ = env.reset()
         all_rewards.append(episode_reward)
         episode_reward = 0        
         

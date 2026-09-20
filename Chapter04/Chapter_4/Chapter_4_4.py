@@ -1,18 +1,24 @@
 from os import system, name
 from time import sleep
 import numpy as np
-import gym
+import gymnasium as gym
 import random
 from tqdm import tqdm
 
-env = gym.make("FrozenLake-v0")
-env.render()
+env = gym.make("FrozenLake-v1", render_mode="ansi")
+env.reset()
+print(env.render())
 
 action_size = env.action_space.n
 print("Action size ", action_size)
 state_size = env.observation_space.n
 print("State size ", state_size)
 
+# NOTE: the Q-table starts at 0.25 everywhere. Q-values are expected returns, not probabilities,
+# and terminal states (holes and the goal) are never updated, so they keep that 0.25. The update
+# below bootstraps from max(qtable[new_state]), which makes falling in a hole look worthwhile.
+# Starting from np.zeros((state_size, action_size)) often trains a much better agent here
+# (in a few test runs, scores of about 0.5 instead of about 0.01).
 qtable = np.ones((state_size, action_size))/action_size
 print(qtable)
 
@@ -37,19 +43,20 @@ def clear():
         _ = system('clear') 
 
 def play_game(render_game):
-    state = env.reset()
+    state, _ = env.reset()
     step = 0
     done = False
     total_rewards = 0    
     for step in range(max_steps):  
         if render_game:
-            env.render()
+            print(env.render())
             print("****************************************************")
             print("EPISODE ", episode)
             sleep(.5)
             clear()
         action = np.argmax(qtable[state,:])
-        new_state, reward, done, info = env.step(action)
+        new_state, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
         total_rewards += reward
         if done:
             rewards.append(total_rewards)
@@ -60,7 +67,7 @@ def play_game(render_game):
     return done, state, step, total_rewards
 
 for episode in tqdm(range(total_episodes)):
-    state = env.reset()
+    state, _ = env.reset()
     step = 0
     done = False
     if episode % play_game_test_episode == 0:
@@ -71,7 +78,8 @@ for episode in tqdm(range(total_episodes)):
             action = np.argmax(qtable[state,:])
         else:
             action = env.action_space.sample()
-        new_state, reward, done, info = env.step(action)
+        new_state, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
         qtable[state, action] = qtable[state, action] + learning_rate * (reward + gamma * 
         np.max(qtable[new_state, :]) - qtable[state, action])
         state = new_state

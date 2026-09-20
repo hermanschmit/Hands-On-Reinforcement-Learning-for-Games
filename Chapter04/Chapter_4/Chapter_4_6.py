@@ -1,10 +1,11 @@
 import numpy as np
-import gym
+import gymnasium as gym
 import random
 from tqdm import tqdm
 
-env = gym.make("Taxi-v2")
-env.render()
+env = gym.make("Taxi-v3", render_mode="ansi")
+env.reset()
+print(env.render())
 
 action_size = env.action_space.n
 print("Action size ", action_size)
@@ -31,7 +32,7 @@ decay_rate = 0.01 # Exponential decay rate for exploration prob
 # 2 For life or until learning is stopped
 for episode in tqdm(range(total_episodes)):
 # Reset the environment
-    state = env.reset()
+    state, _ = env.reset()
     step = 0
     done = False
 
@@ -49,7 +50,8 @@ for episode in tqdm(range(total_episodes)):
             action = env.action_space.sample()
 
 # Take the action (a) and observe the outcome state(s') and reward (r)
-        new_state, reward, done, info = env.step(action)
+        new_state, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
 
 # Update Q(s,a):= Q(s,a) + lr [R(s,a) + gamma * max Q(s',a') - Q(s,a)]
         qtable[state, action] = qtable[state, action] + learning_rate * (reward + gamma * 
@@ -68,7 +70,7 @@ env.reset()
 rewards = []
 
 for episode in range(total_test_episodes):
-    state = env.reset()
+    state, _ = env.reset()
     step = 0
     done = False
     total_rewards = 0
@@ -81,7 +83,8 @@ for episode in range(total_test_episodes):
       # Take the action (index) that have the maximum expected future reward given that state
         action = np.argmax(qtable[state,:])
 
-        new_state, reward, done, info = env.step(action)
+        new_state, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
 
         total_rewards += reward
 

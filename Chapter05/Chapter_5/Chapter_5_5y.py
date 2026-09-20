@@ -1,14 +1,14 @@
-import gym
+import gymnasium as gym
 import math
 from copy import deepcopy
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 #from tqdm import tqdm
 from tqdm import trange
 from time import sleep
 
-env = gym.make('LunarLander-v2')
+env = gym.make('LunarLander-v3')
+show_env = gym.make('LunarLander-v3', render_mode='human')
 Q_table = np.zeros((5,5,5,5,5,5,5,5,4))
 alpha=0.3
 buckets=[5,5,5,5,5,5,5,5]
@@ -56,18 +56,18 @@ def updateQ_SARSA(observation,reward,action,ini_obs,next_action,t,eligibility):
 tr = trange(episodes, desc='Agent training', leave=True)
 tot_reward = 0
 for episode in tr:
+    run_env = show_env if episode % episode_run_on == 0 else env
     tr.set_description("Agent training (episode{}) Avg Reward {}".format(episode+1,tot_reward/(episode+1)))
     tr.refresh() 
     sleep(0.01)
-    observation = env.reset()
+    observation, _ = run_env.reset()
     t=0
     eligibility = np.zeros((5,5,5,5,5,5,5,5,4))
     done=False
     while (done==False):
-        if episode % episode_run_on == 0:
-            env.render()
         action = get_action(observation,episode)
-        next_obs, reward, done, info = env.step(action)
+        next_obs, reward, terminated, truncated, info = run_env.step(action)
+        done = terminated or truncated
         interval = to_discrete_states(observation)
         eligibility *= lambdaa * gamma
         eligibility[tuple(interval)][action]+=1
@@ -80,5 +80,8 @@ for episode in tr:
         t+=1
     rewards.append(t+1)     
     
+env.close()
+show_env.close()
+
 plt.plot(rewards)
 plt.show()

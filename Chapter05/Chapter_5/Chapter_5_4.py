@@ -1,17 +1,18 @@
-import gym
+import gymnasium as gym
 import math
 from copy import deepcopy
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 env = gym.make('MountainCar-v0')
+show_env = gym.make('MountainCar-v0', render_mode='human')
 Q_table = np.zeros((65,65,3))
 alpha=0.3
 buckets=[65, 65]
 gamma=0.99
 rewards=[]
 episodes=2000
+episode_run_on = 250
 lambdaa=0.8
 
 def to_discrete_states(observation):
@@ -50,14 +51,15 @@ def updateQ_SARSA(observation,reward,action,ini_obs,next_action,t,eligibility):
 	Q_table[:,:,action]+=lr*td_error*(eligibility[:,:,action])
 
 for episode in range(episodes):
-    observation = env.reset()
+    run_env = show_env if episode % episode_run_on == 0 else env
+    observation, _ = run_env.reset()
     t=0
     eligibility = np.zeros((65,65,3))
     done=False
     while (done==False):
-        env.render()
         action = get_action(observation,episode)
-        next_obs, reward, done, info = env.step(action)
+        next_obs, reward, terminated, truncated, info = run_env.step(action)
+        done = terminated or truncated
         interval = to_discrete_states(observation)
         eligibility *= lambdaa * gamma
         eligibility[tuple(interval)][action]+=1
@@ -69,5 +71,8 @@ for episode in range(episodes):
         t+=1
     rewards.append(t+1)
     
+env.close()
+show_env.close()
+
 plt.plot(rewards)
 plt.show()

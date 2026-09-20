@@ -1,6 +1,9 @@
+# NOTE: This is a partial listing. It imports tester, buffer, config, core.util, model and
+# trainer, which are not included in this repository (they belong to a separate DQN project),
+# so it cannot be run on its own. It also calls .cuda() unconditionally, so it needs a CUDA GPU.
 import argparse
 import random
-import gym
+import gymnasium as gym
 import torch
 from torch.optim import Adam
 from tester import Tester

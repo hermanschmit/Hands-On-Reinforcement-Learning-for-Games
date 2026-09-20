@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 import matplotlib.pyplot as plt
 
-import gym
+import gymnasium as gym
 import numpy as np
 
 from collections import deque
@@ -87,8 +87,9 @@ class ReplayBuffer(object):
     def __len__(self):
         return len(self.buffer)
 
-env_id = 'LunarLander-v2'
+env_id = 'LunarLander-v3'
 env = gym.make(env_id)
+show_env = gym.make(env_id, render_mode='human')
 
 episodes = 200000
 batch_size = 64
@@ -105,6 +106,7 @@ epsilon_final = 0.01
 epsilon_decay = episodes / 10
 buffer_size = episodes / 10
 neurons = 128
+play_every = 25
 
 eps_by_episode = lambda episode: epsilon_final + (epsilon_start - epsilon_final) * math.exp(-1. * episode / epsilon_decay)
 plt.plot([eps_by_episode(i) for i in range(episodes)])
@@ -144,8 +146,9 @@ class DDQN(nn.Module):
     
     def act(self, state, epsilon):
         if random.random() > epsilon:
-            state   = autograd.Variable(torch.FloatTensor(state).unsqueeze(0), volatile=True)
-            q_value = self.forward(state)
+            state   = autograd.Variable(torch.FloatTensor(state).unsqueeze(0))
+            with torch.no_grad():
+                q_value = self.forward(state)
             action  = q_value.max(1)[1].item()
         else:
             action = random.randrange(env.action_space.n)
@@ -175,7 +178,8 @@ def compute_td_loss(batch_size, beta):
     weights    = autograd.Variable(torch.FloatTensor(weights))
 
     q_values      = current_model(state)
-    next_q_values = target_model(next_state)
+    with torch.no_grad():
+        next_q_values = target_model(next_state)
 
     q_value          = q_values.gather(1, action.unsqueeze(1)).squeeze(1)
     next_q_value     = next_q_values.max(1)[0]
@@ -205,14 +209,14 @@ def plot(episode, rewards, losses):
 
 def play_game():
     done = False
-    state = env.reset()
+    state, _ = show_env.reset()
     while(not done):
         action = current_model.act(state, epsilon_final)
-        next_state, reward, done, _ = env.step(action)
-        env.render()
+        next_state, reward, terminated, truncated, _ = show_env.step(action)
+        done = terminated or truncated
         state = next_state
 
-state = env.reset()
+state, _ = env.reset()
 tot_reward = 0
 tr = trange(episodes+1, desc='Agent training', leave=True)
 for episode in tr:
@@ -223,7 +227,8 @@ for episode in tr:
     epsilon = eps_by_episode(episode)
     action = current_model.act(state, epsilon)
     
-    next_state, reward, done, _ = env.step(action)
+    next_state, reward, terminated, truncated, _ = env.step(action)
+    done = terminated or truncated
     replay_buffer.push(state, action, reward, next_state, done)
 
     tot_reward += reward
@@ -232,9 +237,9 @@ for episode in tr:
     episode_reward += reward
     
     if done:
-        if episode > buffer_size and avg_reward > min_play_reward:
+        if episode > buffer_size and avg_reward > min_play_reward and len(all_rewards) % play_every == 0:
             play_game()
-        state = env.reset()
+        state, _ = env.reset()
         all_rewards.append(episode_reward)
         episode_reward = 0        
         

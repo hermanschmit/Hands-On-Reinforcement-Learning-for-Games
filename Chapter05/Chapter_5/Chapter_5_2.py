@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 import math
 from copy import deepcopy
 import numpy as np
@@ -46,14 +46,15 @@ def update_SARSA(observation,reward,action,ini_obs,next_action,t):
 	Q_table[tuple(ini_interval)][action]+=max(0.4, expect_alpha(t))*(reward + gamma*(Q_next) - Q_table[tuple(ini_interval)][action])
 
 for episode in range(episodes):
-    observation = env.reset() 
+    observation, _ = env.reset()
     t=0
     done=False
     while (done==False):
         #env.render()
         #print(observation)
         action = get_action(observation,episode)
-        obs_next, reward, done, info = env.step(action)
+        obs_next, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
         next_action = get_action(obs_next,episode)
         update_SARSA(obs_next,reward,action,observation,next_action,episode)	
         observation=obs_next

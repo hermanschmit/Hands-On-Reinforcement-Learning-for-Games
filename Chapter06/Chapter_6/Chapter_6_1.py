@@ -12,6 +12,10 @@ y = torch.randn(batch_size, outputs, device=device, dtype=dtype)
 layer1 = torch.randn(inputs, hidden, device=device, dtype=dtype)
 layer2 = torch.randn(hidden, outputs, device=device, dtype=dtype)
 
+# NOTE: learning_rate was not defined in the original listing, so the update step below raised a NameError.
+# 1e-6 is an assumed value (the PyTorch tutorial this example is adapted from uses it), not one taken from
+# the book. It trains fine: the loss drops from about 300 at step 100 to about 0.00002 at step 500.
+learning_rate = 1e-6
 
 for t in range(500):    
     h = x.mm(layer1)

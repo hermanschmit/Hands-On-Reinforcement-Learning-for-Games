@@ -1,14 +1,18 @@
-import gym
+import gymnasium as gym
 import numpy as np
 import operator
-from IPython.display import clear_output
+from os import system, name
 from time import sleep
 import random
 import itertools
-import tqdm
 
-tqdm.monitor_interval = 0
 random.seed(8983)
+
+def clear():
+    if name == 'nt': 
+        _ = system('cls')    
+    else: 
+        _ = system('clear') 
 
 def create_random_policy(env):
     policy = {}
@@ -31,10 +35,10 @@ def play_game(env, policy, display=True):
     finished = False
 
     while not finished:
-        s = env.env.s
+        s = env.unwrapped.s
         if display:
-            clear_output(True)
-            env.render()
+            clear()
+            print(env.render())
             sleep(1)
 
         timestep = []
@@ -47,7 +51,8 @@ def play_game(env, policy, display=True):
             if n < top_range:
                 action = prob[0]
                 break 
-        state, reward, finished, info = env.step(action)
+        state, reward, terminated, truncated, info = env.step(action)
+        finished = terminated or truncated
             
         timestep.append(action)
         timestep.append(reward)
@@ -55,8 +60,8 @@ def play_game(env, policy, display=True):
         episode.append(timestep)
 
     if display:
-        clear_output(True)
-        env.render()
+        clear()
+        print(env.render())
         sleep(1)
     return episode
 
@@ -112,7 +117,7 @@ def monte_carlo_e_soft(env, episodes=100, policy=None, epsilon=0.01, test_policy
 
     return policy
 
-env = gym.make('FrozenLake8x8-v0')
-#env = gym.make('FrozenLake-v0')
+env = gym.make('FrozenLake8x8-v1', render_mode='ansi')
+#env = gym.make('FrozenLake-v1', render_mode='ansi')
 policy = monte_carlo_e_soft(env,episodes=50000)
 print(test_policy(policy, env))

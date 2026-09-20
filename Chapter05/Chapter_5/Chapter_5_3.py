@@ -1,16 +1,18 @@
-import gym
+import gymnasium as gym
 import math
 from copy import deepcopy
 import numpy as np
 import matplotlib.pyplot as plt
 
 env = gym.make('CartPole-v0')
+show_env = gym.make('CartPole-v0', render_mode='human')
 Q_table = np.zeros((20,20,20,20,3))
 alpha=0.3
 buckets=[20, 20, 20, 20]
 gamma=0.99
 rewards=[]
 episodes = 3000
+episode_run_on = 250
 
 def to_discrete_states(observation):
 	interval=[0 for i in range(len(observation))]
@@ -46,20 +48,24 @@ def update_SARSA(observation,reward,action,ini_obs,next_action,t):
 	Q_table[tuple(ini_interval)][action]+=max(0.4, expect_alpha(t))*(reward + gamma*(Q_next) - Q_table[tuple(ini_interval)][action])
 
 for episode in range(episodes):
-    observation = env.reset() 
+    run_env = show_env if episode % episode_run_on == 0 else env
+    observation, _ = run_env.reset()
     t=0
     done=False
     while (done==False):
-        env.render()
         print(observation)
         action = get_action(observation,episode)
-        obs_next, reward, done, info = env.step(action)
+        obs_next, reward, terminated, truncated, info = run_env.step(action)
+        done = terminated or truncated
         next_action = get_action(obs_next,episode)
         update_SARSA(obs_next,reward,action,observation,next_action,episode)	
         observation=obs_next
         action = next_action
         t+=1
     rewards.append(t+1)			
+
+env.close()
+show_env.close()
 
 plt.plot(rewards)
 plt.show()
