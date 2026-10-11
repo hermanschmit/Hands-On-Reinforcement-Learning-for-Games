@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 import random
 import collections
 import numpy as np
@@ -34,8 +34,10 @@ class ReplayBuffer():
             s_prime_lst.append(s_prime)
             done_mask_lst.append([done_mask])
         
-        return torch.tensor(s_lst, dtype=torch.float), torch.tensor(a_lst), \
-               torch.tensor(r_lst), torch.tensor(s_prime_lst, dtype=torch.float), \
+        # dtype=torch.float: the action and reward values are numpy float64, which torch.tensor would keep as
+        # float64 and then clash with the float32 networks ("mat1 and mat2 must have the same dtype").
+        return torch.tensor(s_lst, dtype=torch.float), torch.tensor(a_lst, dtype=torch.float), \
+               torch.tensor(r_lst, dtype=torch.float), torch.tensor(s_prime_lst, dtype=torch.float), \
                torch.tensor(done_mask_lst)
     
     def size(self):
@@ -103,7 +105,8 @@ def soft_update(net, net_target):
           
     
 
-env = gym.make('Pendulum-v0')
+env = gym.make('Pendulum-v1')
+show_env = gym.make('Pendulum-v1', render_mode='human')
 memory = ReplayBuffer()
 
 q, q_target = QNet(), QNet()
@@ -114,6 +117,7 @@ mu_target.load_state_dict(mu.state_dict())
 score = 0.0
 print_interval = 20
 min_play_reward = 0
+play_every = 25
 iterations = 100000
 
 mu_optimizer = optim.Adam(mu.parameters(), lr=lr_mu)
@@ -123,27 +127,28 @@ ou_noise = OrnsteinUhlenbeckNoise(mu=np.zeros(1))
 
 def play_game():
     done = False
-    state = env.reset()    
-    while(not done):        
-        a = mu(torch.from_numpy(s).float()) 
+    state, _ = show_env.reset()
+    while(not done):
+        a = mu(torch.from_numpy(state).float()) 
         a = a.item() + ou_noise()[0]
-        s_prime, r, done, info = env.step([a])
-        env.render()
+        s_prime, r, terminated, truncated, info = show_env.step([a])
+        done = terminated or truncated
         state = s_prime   
 
 
 for iteration in range(iterations):
-    s = env.reset()        
+    s, _ = env.reset()
     for t in range(300): # maximum length of episode is 200 for Pendulum-v0
         a = mu(torch.from_numpy(s).float()) 
         a = a.item() + ou_noise()[0]
-        s_prime, r, done, info = env.step([a])
+        s_prime, r, terminated, truncated, info = env.step([a])
+        done = terminated or truncated
         memory.put((s,a,r/100.0,s_prime,done))
         score +=r
         s = s_prime
 
         if done:
-            if score/print_interval > min_play_reward:
+            if score/print_interval > min_play_reward and iteration % play_every == 0:
                 play_game()
             break              
                 

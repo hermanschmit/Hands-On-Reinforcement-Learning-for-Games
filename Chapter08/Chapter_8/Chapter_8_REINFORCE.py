@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -27,48 +27,55 @@ class REINFORCE(nn.Module):
         self.data.append(item)
         
     def train_net(self):
+        # NOTE: The original called optimizer.step() inside this loop (one update per timestep). Recent versions of
+        # PyTorch raise a RuntimeError for that, because each log_prob's graph was built with weights that an
+        # earlier optimizer.step() has since modified in place. Accumulating the gradients over the whole episode
+        # and stepping once (the standard REINFORCE update) avoids the error.
         R = 0
+        self.optimizer.zero_grad()
         for r, log_prob in self.data[::-1]:
             R = r + gamma * R
             loss = -log_prob * R
-            self.optimizer.zero_grad()
             loss.backward()
-            self.optimizer.step()
+        self.optimizer.step()
         self.data = []
 
-env = gym.make('LunarLander-v2')
+env = gym.make('LunarLander-v3')
+show_env = gym.make('LunarLander-v3', render_mode='human')
 pi = REINFORCE(env.observation_space.shape[0], env.action_space.n)
 score = 0.0
 print_interval = 100
 iterations = 10000
 min_play_reward = 20
+play_every = 25
 
 def play_game():
     done = False
-    state = env.reset()
+    state, _ = show_env.reset()
     its = 500
     while(not done and its > 0):
         its -= 1
         prob = pi.act(torch.from_numpy(state).float())
         m = Categorical(prob)
         action = m.sample()
-        next_state, reward, done, _ = env.step(action.item())
-        env.render()
+        next_state, reward, terminated, truncated, _ = show_env.step(action.item())
+        done = terminated or truncated
         state = next_state
 
 for iteration in range(iterations):
-    s = env.reset()
+    s, _ = env.reset()
     for t in range(501): # CartPole-v1 forced to terminates at 500 step.
         prob = pi.act(torch.from_numpy(s).float())
         m = Categorical(prob)
         action = m.sample()
-        s_prime, r, done, info = env.step(action.item())
+        s_prime, r, terminated, truncated, info = env.step(action.item())
+        done = terminated or truncated
         pi.put_data((r,torch.log(prob[action])))
             
         s = s_prime
         score += r
         if done:
-            if score/print_interval > min_play_reward:
+            if score/print_interval > min_play_reward and iteration % play_every == 0:
                 play_game()
             break
 
