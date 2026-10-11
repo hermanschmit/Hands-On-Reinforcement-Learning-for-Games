@@ -2,7 +2,7 @@ import math
 import random
 from collections import namedtuple, deque
 
-import gym
+import gymnasium as gym
 import numpy as np
 
 import torch
@@ -10,6 +10,8 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import torch.autograd as autograd
+
+import matplotlib.pyplot as plt
 
 class ReplayBuffer(object):
     def __init__(self, capacity):
@@ -31,6 +33,7 @@ class ReplayBuffer(object):
 class Net(nn.Module):
     def __init__(self, num_inputs, num_outputs):
         super(Net, self).__init__()
+        self.num_outputs = num_outputs
         
         self.layers = nn.Sequential(
             nn.Linear(num_inputs, 256),
@@ -44,12 +47,12 @@ class Net(nn.Module):
     def act(self, state, epsilon):
         if random.random() > epsilon:
             state  = torch.FloatTensor(state).unsqueeze(0)
-            action = self.forward(autograd.Variable(state, volatile=True)).max(1)[1]
+            action = self.forward(autograd.Variable(state)).max(1)[1]
             return action.item()
         else:
-            return random.randrange(num_actions)
+            return random.randrange(self.num_outputs)
 
-env_id = "LunarLander-v2"
+env_id = "LunarLander-v3"
 env = gym.make(env_id)
 
 num_goals    = env.observation_space.shape[0]
@@ -68,9 +71,12 @@ meta_optimizer = optim.Adam(meta_model.parameters())
 replay_buffer      = ReplayBuffer(10000)
 meta_replay_buffer = ReplayBuffer(10000)
 
+# NOTE: The original was copied from an example with 6 discrete states (np.zeros(6), oh[x - 1]). Here a goal is the
+# index of one of LunarLander's num_goals (8) state values, so the one-hot vector needs num_goals entries; with 6
+# the goal_state fed to `model` had 14 values instead of the 2*num_goals = 16 it expects.
 def to_onehot(x):
-    oh = np.zeros(6)
-    oh[x - 1] = 1.
+    oh = np.zeros(num_goals)
+    oh[x] = 1.
     return oh
 
 def update(model, optimizer, replay_buffer, batch_size):
@@ -79,7 +85,7 @@ def update(model, optimizer, replay_buffer, batch_size):
     state, action, reward, next_state, done = replay_buffer.sample(batch_size)
     
     state      = autograd.Variable(torch.FloatTensor(state))
-    next_state = autograd.Variable(torch.FloatTensor(next_state), volatile=True)
+    next_state = autograd.Variable(torch.FloatTensor(next_state))
     action     = autograd.Variable(torch.LongTensor(action))
     reward     = autograd.Variable(torch.FloatTensor(reward))
     done       = autograd.Variable(torch.FloatTensor(done))
@@ -105,7 +111,7 @@ epsilon_by_frame = lambda frame_idx: epsilon_final + (epsilon_start - epsilon_fi
 num_frames = 100000
 frame_idx  = 1
 
-state = env.reset()
+state, _ = env.reset()
 done = False
 all_rewards = []
 episode_reward = 0
@@ -117,10 +123,14 @@ while frame_idx < num_frames:
     meta_state = state
     extrinsic_reward = 0
     
-    while not done and goal != np.argmax(state):
+    # NOTE: The original looped `while not done and goal != np.argmax(state)`. If the meta controller picked a goal
+    # that was already satisfied, no step was taken, frame_idx never advanced and (once epsilon had decayed and the
+    # greedy goal stopped changing) the program looped forever. Always take at least one step instead.
+    while True:
         goal_state  = np.concatenate([state, onehot_goal])
         action = model.act(goal_state, epsilon_by_frame(frame_idx))
-        next_state, reward, done, _ = env.step(action)
+        next_state, reward, terminated, truncated, _ = env.step(action)
+        done = terminated or truncated
 
         episode_reward   += reward
         extrinsic_reward += reward
@@ -133,18 +143,23 @@ while frame_idx < num_frames:
         update(meta_model, meta_optimizer, meta_replay_buffer, 32)
         frame_idx += 1
         
-        if frame_idx % 1000 == 0:
-            clear_output(True)
+        if frame_idx % 1000 == 0 and len(all_rewards) > 0:
             n = 100 #mean reward of last 100 episodes
-            plt.figure(figsize=(20,5))
+            print("frame %d, episodes %d, mean reward of last %d: %.1f" % (frame_idx, len(all_rewards), n, np.mean(all_rewards[-n:])))
+            # The original used Jupyter's clear_output() and a blocking plt.show(); redraw one window without blocking.
+            plt.figure(1) if plt.fignum_exists(1) else plt.figure(1, figsize=(20,5))
+            plt.clf()
             plt.title(frame_idx)
             plt.plot([np.mean(all_rewards[i:i + n]) for i in range(0, len(all_rewards), n)])
-            plt.show()
+            plt.pause(0.001)
+
+        if done or goal == np.argmax(state):
+            break
 
     meta_replay_buffer.push(meta_state, goal, extrinsic_reward, state, done)
         
     if done:
-        state = env.reset()
+        state, _ = env.reset()
         done  = False
         all_rewards.append(episode_reward)
         episode_reward = 0

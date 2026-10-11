@@ -2,9 +2,9 @@
 
 import math
 
-import cherry as ch
 import torch as th
 from torch import nn
+from torch.nn import functional as F
 from torch.distributions import Normal, Categorical
 
 EPSILON = 1e-6
@@ -66,7 +66,7 @@ class CategoricalPolicy(nn.Module):
         self.input_size = input_size
 
     def forward(self, state):
-        state = ch.onehot(state, dim=self.input_size)
+        state = F.one_hot(state.long().view(-1), self.input_size).float()
         loc = self.mean(state)
         density = Categorical(logits=loc)
         action = density.sample()

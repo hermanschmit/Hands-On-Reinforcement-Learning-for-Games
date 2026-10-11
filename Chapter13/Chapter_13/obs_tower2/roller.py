@@ -31,7 +31,7 @@ class Roller:
         self._prev_states, self._prev_obs = self.batched_env.reset()
         self._prev_states = np.array(self._prev_states)
         self._prev_obs = np.array(self._prev_obs)
-        self._prev_dones = np.zeros([self.batched_env.num_envs], dtype=np.bool)
+        self._prev_dones = np.zeros([self.batched_env.num_envs], dtype=bool)
 
     def rollout(self):
         if self._prev_obs is None:
@@ -40,7 +40,7 @@ class Roller:
         states = np.zeros((self.num_steps + 1,) + self._prev_states.shape, dtype=np.float32)
         obses = np.zeros((self.num_steps + 1,) + self._prev_obs.shape, dtype=self._prev_obs.dtype)
         rews = np.zeros([self.num_steps, batch], dtype=np.float32)
-        dones = np.zeros([self.num_steps + 1, batch], dtype=np.bool)
+        dones = np.zeros([self.num_steps + 1, batch], dtype=bool)
         infos = []
         model_outs = []
         for t in range(self.num_steps):

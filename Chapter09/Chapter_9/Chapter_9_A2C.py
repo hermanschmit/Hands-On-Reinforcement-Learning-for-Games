@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,7 +15,7 @@ update_interval = 5
 gamma = 0.98
 max_train_steps = 60000
 PRINT_INTERVAL = update_interval * 100
-environment =  "LunarLander-v2"#"CartPole-v1"
+environment =  "LunarLander-v3"#"CartPole-v1"
 
 class ActorCritic(nn.Module):
     def __init__(self, input_shape, num_actions):
@@ -38,20 +38,20 @@ class ActorCritic(nn.Module):
 def worker(worker_id, master_end, worker_end):
     master_end.close()  # Forbid worker to use the master end for messaging
     env = gym.make(environment)
-    env.seed(worker_id)
+    # gymnasium removed env.seed(); the seed is passed to the first reset() instead.
+    seed = worker_id
 
     while True:
         cmd, data = worker_end.recv()
         if cmd == 'step':
-            ob, reward, done, info = env.step(data)
+            ob, reward, terminated, truncated, info = env.step(data)
+            done = terminated or truncated
             if done:
-                ob = env.reset()
+                ob, _ = env.reset()
             worker_end.send((ob, reward, done, info))
         elif cmd == 'reset':
-            ob = env.reset()
-            worker_end.send(ob)
-        elif cmd == 'reset_task':
-            ob = env.reset_task()
+            ob, _ = env.reset(seed=seed)
+            seed = None
             worker_end.send(ob)
         elif cmd == 'close':
             worker_end.close()
@@ -120,11 +120,12 @@ def test(step_idx, model):
     num_test = 10
 
     for _ in range(num_test):
-        s = env.reset()
+        s, _ = env.reset()
         while not done:
             prob = model.pi(torch.from_numpy(s).float(), softmax_dim=0)
-            a = Categorical(prob).sample().numpy()
-            s_prime, r, done, info = env.step(a)
+            a = Categorical(prob).sample().item()
+            s_prime, r, terminated, truncated, info = env.step(a)
+            done = terminated or truncated
             s = s_prime
             score += r
         done = False
@@ -140,7 +141,7 @@ def compute_target(v_final, r_lst, mask_lst):
         G = r + gamma * G * mask
         td_target.append(G)
 
-    return torch.tensor(td_target[::-1]).float()
+    return torch.tensor(np.array(td_target[::-1])).float()
 
 if __name__ == '__main__':
     envs = ParallelEnv(n_train_processes)
@@ -172,8 +173,8 @@ if __name__ == '__main__':
         td_target = compute_target(v_final, r_lst, mask_lst)
 
         td_target_vec = td_target.reshape(-1)
-        s_vec = torch.tensor(s_lst).float().reshape(-1, state_size)  # 4 == Dimension of state
-        a_vec = torch.tensor(a_lst).reshape(-1).unsqueeze(1)
+        s_vec = torch.tensor(np.array(s_lst)).float().reshape(-1, state_size)
+        a_vec = torch.tensor(np.array(a_lst)).reshape(-1).unsqueeze(1)
         mod = model.v(s_vec)
         advantage = td_target_vec - mod.reshape(-1)
 

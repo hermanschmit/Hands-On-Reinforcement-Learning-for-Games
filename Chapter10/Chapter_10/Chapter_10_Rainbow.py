@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 import numpy as np
 
 import torch
@@ -12,7 +12,7 @@ from common.replay_buffer import ReplayBuffer
 
 from torch.utils.tensorboard import SummaryWriter
 
-env_id = "LunarLander-v2"
+env_id = "LunarLander-v3"
 env = gym.make(env_id)
 writer = SummaryWriter()
 
@@ -51,7 +51,7 @@ class RainbowDQN(nn.Module):
         advantage = advantage.view(batch_size, self.num_actions, self.num_atoms)
         
         x = value + advantage - advantage.mean(1, keepdim=True)
-        x = F.softmax(x.view(-1, self.num_atoms)).view(-1, self.num_actions, self.num_atoms)
+        x = F.softmax(x.view(-1, self.num_atoms), dim=1).view(-1, self.num_actions, self.num_atoms)
         
         return x
         
@@ -62,7 +62,7 @@ class RainbowDQN(nn.Module):
         self.noisy_advantage2.reset_noise()
     
     def act(self, state):
-        state = autograd.Variable(torch.FloatTensor(state).unsqueeze(0), volatile=True)
+        state = autograd.Variable(torch.FloatTensor(state).unsqueeze(0))
         dist = self.forward(state).data.cpu()
         dist = dist * torch.linspace(self.Vmin, self.Vmax, self.num_atoms)
         action = dist.sum(2).max(1)[1].numpy()[0]
@@ -90,8 +90,11 @@ def projection_distribution(next_state, rewards, dones):
     delta_z = float(Vmax - Vmin) / (num_atoms - 1)
     support = torch.linspace(Vmin, Vmax, num_atoms)
     
-    next_dist   = target_model(next_state).data.cpu() * support
-    next_action = next_dist.sum(2).max(1)[1]
+    # NOTE: The original multiplied next_dist by the support here and then used those products (some negative) as
+    # the probabilities that get projected below, so the target was not a probability distribution. The product is
+    # only needed to pick the greedy next action.
+    next_dist   = target_model(next_state).data.cpu()
+    next_action = (next_dist * support).sum(2).max(1)[1]
     next_action = next_action.unsqueeze(1).unsqueeze(1).expand(next_dist.size(0), 1, next_dist.size(2))
     next_dist   = next_dist.gather(1, next_action).squeeze(1)
         
@@ -104,6 +107,9 @@ def projection_distribution(next_state, rewards, dones):
     b  = (Tz - Vmin) / delta_z
     l  = b.floor().long()
     u  = b.ceil().long()
+    # When b lands exactly on an atom, l == u and both weights below are 0, which would drop that probability mass.
+    l[(u > 0) & (l == u)] -= 1
+    u[(l < (num_atoms - 1)) & (l == u)] += 1
         
     offset = torch.linspace(0, (batch_size - 1) * num_atoms, batch_size).long()\
                     .unsqueeze(1).expand(batch_size, num_atoms)
@@ -118,7 +124,7 @@ def compute_td_loss(batch_size):
     state, action, reward, next_state, done = replay_buffer.sample(batch_size) 
 
     state      = autograd.Variable(torch.FloatTensor(np.float32(state)))
-    next_state = autograd.Variable(torch.FloatTensor(np.float32(next_state)), volatile=True)
+    next_state = autograd.Variable(torch.FloatTensor(np.float32(next_state)))
     action     = autograd.Variable(torch.LongTensor(action))
     reward     = torch.FloatTensor(reward)
     done       = torch.FloatTensor(np.float32(done))
@@ -159,18 +165,20 @@ losses = []
 all_rewards = []
 episode_reward = 0
 
-state = env.reset()
+state, _ = env.reset()
 for iteration in range(1, iterations + 1):
     action = current_model.act(state)
     
-    next_state, reward, done, _ = env.step(action)
+    next_state, reward, terminated, truncated, _ = env.step(action)
+    
+    done = terminated or truncated
     replay_buffer.push(state, action, reward, next_state, done)
     
     state = next_state
     episode_reward += reward
     
     if done:
-        state = env.reset()
+        state, _ = env.reset()
         all_rewards.append(episode_reward)
         episode_reward = 0
         

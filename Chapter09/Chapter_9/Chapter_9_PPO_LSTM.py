@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -59,8 +59,8 @@ class PPO(nn.Module):
             done_mask = 0 if done else 1
             done_lst.append([done_mask])
             
-        s,a,r,s_prime,done_mask,prob_a = torch.tensor(s_lst, dtype=torch.float), torch.tensor(a_lst), \
-                                         torch.tensor(r_lst), torch.tensor(s_prime_lst, dtype=torch.float), \
+        s,a,r,s_prime,done_mask,prob_a = torch.tensor(np.array(s_lst), dtype=torch.float), torch.tensor(a_lst), \
+                                         torch.tensor(r_lst), torch.tensor(np.array(s_prime_lst), dtype=torch.float), \
                                          torch.tensor(done_lst, dtype=torch.float), torch.tensor(prob_a_lst)
         self.data = []
         return s,a,r,s_prime, done_mask, prob_a, h_in_lst[0], h_out_lst[0]
@@ -94,11 +94,11 @@ class PPO(nn.Module):
             loss = -torch.min(surr1, surr2) + F.smooth_l1_loss(v_s, td_target.detach())
 
             self.optimizer.zero_grad()
-            loss.mean().backward(retain_graph=True)
+            loss.mean().backward()
             self.optimizer.step()
         
 
-env = gym.make('LunarLander-v2')
+env = gym.make('LunarLander-v3')
 model = PPO(env.observation_space.shape[0], env.action_space.n)
 score = 0.0
 print_interval = 20
@@ -106,17 +106,21 @@ iterations = 10000
     
 for iteration in range(iterations):
     h_out = (torch.zeros([1, 1, 32], dtype=torch.float), torch.zeros([1, 1, 32], dtype=torch.float))
-    s = env.reset()
+    s, _ = env.reset()
     done = False
         
     while not done:
         for t in range(T_horizon):
             h_in = h_out
-            prob, h_out = model.pi(torch.from_numpy(s).float(), h_in)
+            # no_grad: otherwise each hidden state's autograd graph chains back through the whole episode
+            # (train_net detaches them anyway), which grows memory without bound.
+            with torch.no_grad():
+                prob, h_out = model.pi(torch.from_numpy(s).float(), h_in)
             prob = prob.view(-1)
             m = Categorical(prob)
             a = m.sample().item()
-            s_prime, r, done, info = env.step(a)
+            s_prime, r, terminated, truncated, info = env.step(a)
+            done = terminated or truncated
 
             model.put_data((s, a, r/100.0, s_prime, prob[a].item(), h_in, h_out, done))
             s = s_prime

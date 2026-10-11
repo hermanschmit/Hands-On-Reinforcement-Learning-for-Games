@@ -1,53 +1,54 @@
 
+# NOTE: This example originally used keras-rl, which has not been maintained since 2018 and only runs on
+# TensorFlow 1.x with the old gym API (its keras-rl2 fork stops at TensorFlow 2.15 / NumPy 1.x). It is ported here to
+# Stable-Baselines3 (pip install stable-baselines3), the maintained library in the same spirit: a complete DQN agent,
+# configured and trained in a few lines.
 import numpy as np
-import gym
+import gymnasium as gym
+import torch
 
-from keras.models import Sequential
-from keras.layers import Dense, Activation, Flatten
-from keras.optimizers import Adam
-
-from rl.agents.dqn import DQNAgent
-from rl.policy import BoltzmannQPolicy
-from rl.memory import SequentialMemory
+from stable_baselines3 import DQN
 
 
-ENV_NAME = 'CartPole-v0'
+ENV_NAME = 'CartPole-v1'
 
 
 # Get the environment and extract the number of actions.
 env = gym.make(ENV_NAME)
 np.random.seed(123)
-env.seed(123)
 nb_actions = env.action_space.n
 
-# Next, we build a very simple model.
-model = Sequential()
-model.add(Flatten(input_shape=(1,) + env.observation_space.shape))
-model.add(Dense(16))
-model.add(Activation('relu'))
-model.add(Dense(16))
-model.add(Activation('relu'))
-model.add(Dense(16))
-model.add(Activation('relu'))
-model.add(Dense(nb_actions))
-model.add(Activation('linear'))
-print(model.summary())
+# Next, we build a simple model: two hidden layers of 256 relu units, with nb_actions linear outputs. (The keras-rl
+# version used three layers of 16 units; with Stable-Baselines3's epsilon-greedy DQN that network is unstable and
+# usually collapses to ~10 reward, while this one reliably reaches the maximum score of 500.)
+policy_kwargs = dict(net_arch=[256, 256], activation_fn=torch.nn.ReLU)
 
-# Finally, we configure and compile our agent. You can use every built-in Keras optimizer and
-# even the metrics!
-memory = SequentialMemory(limit=50000, window_length=1)
-policy = BoltzmannQPolicy()
-dqn = DQNAgent(model=model, nb_actions=nb_actions, memory=memory, nb_steps_warmup=10,
-               target_model_update=1e-2, policy=policy)
-dqn.compile(Adam(lr=1e-3), metrics=['mae'])
+# Finally, we configure our agent. buffer_size plays the role of keras-rl's SequentialMemory limit and
+# learning_starts its nb_steps_warmup. These are the tuned CartPole settings from the RL Baselines3 Zoo; the
+# keras-rl ones (soft target updates, a Boltzmann policy) do not carry over to Stable-Baselines3's DQN.
+dqn = DQN('MlpPolicy', env, policy_kwargs=policy_kwargs, learning_rate=2.3e-3, batch_size=64, buffer_size=100000,
+          learning_starts=1000, gamma=0.99, target_update_interval=10, train_freq=256, gradient_steps=128,
+          exploration_fraction=0.16, exploration_final_eps=0.04, seed=123, verbose=1)
+print(dqn.policy)
 
-# Okay, now it's time to learn something! We visualize the training here for show, but this
-# slows down training quite a lot. You can always safely abort the training prematurely using
-# Ctrl + C.
-dqn.fit(env, nb_steps=50000, visualize=True, verbose=2)
+# Okay, now it's time to learn something! Training is not visualized (Stable-Baselines3 has no equivalent of
+# keras-rl's visualize=True, which slowed training down a lot anyway). You can always safely abort the training
+# prematurely using Ctrl + C.
+dqn.learn(total_timesteps=50000, log_interval=20)
 
 # After training is done, we save the final weights.
-dqn.save_weights('dqn_{}_weights.h5f'.format(ENV_NAME), overwrite=True)
+dqn.save('dqn_{}_weights'.format(ENV_NAME))
 
 # Finally, evaluate our algorithm for 5 episodes.
-dqn.test(env, nb_episodes=5, visualize=True)
+test_env = gym.make(ENV_NAME, render_mode='human')
+for episode in range(5):
+    state, _ = test_env.reset()
+    done = False
+    episode_reward = 0
+    while not done:
+        action, _ = dqn.predict(state, deterministic=True)
+        state, reward, terminated, truncated, _ = test_env.step(action)
+        done = terminated or truncated
+        episode_reward += reward
+    print('Episode {}: reward: {}'.format(episode + 1, episode_reward))
+test_env.close()

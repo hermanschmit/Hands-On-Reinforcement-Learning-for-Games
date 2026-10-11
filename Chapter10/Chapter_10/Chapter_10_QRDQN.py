@@ -1,6 +1,6 @@
 import math, random
 
-import gym
+import gymnasium as gym
 import numpy as np
 
 import torch
@@ -16,7 +16,7 @@ from common.replay_buffer import ReplayBuffer
 
 from torch.utils.tensorboard import SummaryWriter
 
-env_id = "LunarLander-v2"
+env_id = "LunarLander-v3"
 env = gym.make(env_id)
 writer = SummaryWriter()
 
@@ -63,7 +63,7 @@ class QRDQN(nn.Module):
         
     def act(self, state, epsilon):
         if random.random() > epsilon:
-            state = autograd.Variable(torch.FloatTensor(np.array(state, dtype=np.float32)).unsqueeze(0), volatile=True)
+            state = autograd.Variable(torch.FloatTensor(np.array(state, dtype=np.float32)).unsqueeze(0))
             qvalues = self.forward(state).mean(2)
             action  = qvalues.max(1)[1]
             action  = action.data.cpu().numpy()[0]
@@ -110,7 +110,7 @@ def compute_td_loss(batch_size):
     state, action, reward, next_state, done = replay_buffer.sample(batch_size) 
 
     state      = autograd.Variable(torch.FloatTensor(np.float32(state)))
-    next_state = autograd.Variable(torch.FloatTensor(np.float32(next_state)), volatile=True)
+    next_state = autograd.Variable(torch.FloatTensor(np.float32(next_state)))
     action     = autograd.Variable(torch.LongTensor(action))
     reward     = torch.FloatTensor(reward)
     done       = torch.FloatTensor(np.float32(done))
@@ -121,15 +121,19 @@ def compute_td_loss(batch_size):
     
     tau, expected_quant = projection_distribution(dist, next_state, reward, done)
     k = 1
-    
-    huber_loss = 0.5 * tau.abs().clamp(min=0.0, max=k).pow(2)
-    huber_loss += k * (tau.abs() -  tau.abs().clamp(min=0.0, max=k))
-    quantile_loss = (tau - (tau < 0).float()).abs() * huber_loss
-    loss = torch.tensor(quantile_loss.sum() / num_quant, requires_grad=True)
-        
+
+    # NOTE: The original computed the Huber loss on tau (the fixed quantile fractions) instead of on the TD error u,
+    # so the loss did not depend on the network at all, and then wrapped it in torch.tensor(..., requires_grad=True)
+    # to make backward() run. That detached the loss from the model, so the network never learned anything.
+    u = expected_quant - dist
+    huber_loss = 0.5 * u.abs().clamp(min=0.0, max=k).pow(2)
+    huber_loss += k * (u.abs() -  u.abs().clamp(min=0.0, max=k))
+    quantile_loss = (tau - (u < 0).float()).abs() * huber_loss
+    loss = quantile_loss.sum() / num_quant
+
     optimizer.zero_grad()
     loss.backward()
-    nn.utils.clip_grad_norm(current_model.parameters(), 0.5)
+    nn.utils.clip_grad_norm_(current_model.parameters(), 0.5)
     optimizer.step()
     
     return loss
@@ -157,18 +161,20 @@ losses = []
 all_rewards = []
 episode_reward = 0
 
-state = env.reset()
+state, _ = env.reset()
 for iteration in range(1, iterations + 1):
     action = current_model.act(state, epsilon_by_frame(iteration))
     
-    next_state, reward, done, _ = env.step(action)
+    next_state, reward, terminated, truncated, _ = env.step(action)
+    
+    done = terminated or truncated
     replay_buffer.push(state, action, reward, next_state, done)
     
     state = next_state
     episode_reward += reward
     
     if done:
-        state = env.reset()
+        state, _ = env.reset()
         all_rewards.append(episode_reward)
         episode_reward = 0
         

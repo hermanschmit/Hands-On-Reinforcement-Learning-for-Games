@@ -89,7 +89,7 @@ def sample_recordings(recordings, count):
     Sample recordings such that recordings are weighted in
     proportion to their number of frames.
     """
-    weights = np.array([rec.num_steps for rec in recordings], dtype=np.float)
+    weights = np.array([rec.num_steps for rec in recordings], dtype=np.float64)
     weights /= np.sum(weights)
     return [recordings[np.random.choice(len(recordings), p=weights)] for _ in range(count)]
 

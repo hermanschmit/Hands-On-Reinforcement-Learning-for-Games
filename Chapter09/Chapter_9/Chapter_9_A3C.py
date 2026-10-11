@@ -1,4 +1,4 @@
-import gym
+import gymnasium as gym
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,6 +6,7 @@ import torch.optim as optim
 from torch.distributions import Categorical
 import torch.multiprocessing as mp
 import time
+import numpy as np
 
 # Hyperparameters
 n_train_processes = 10
@@ -14,7 +15,7 @@ update_interval = 5
 gamma = 0.98
 max_train_ep = 3000
 max_test_ep = 4000
-environment = "LunarLander-v2"
+environment = "LunarLander-v3"
 
 env = gym.make(environment)
 state_size = env.observation_space.shape[0]
@@ -41,6 +42,9 @@ class ActorCritic(nn.Module):
 
 
 def train(global_model, rank):
+    # One torch thread per process: with the default (one per core) the 11 processes oversubscribe the CPU
+    # so badly that training crawls.
+    torch.set_num_threads(1)
 
     local_model = ActorCritic(state_size, action_size)
     local_model.load_state_dict(global_model.state_dict())
@@ -51,14 +55,15 @@ def train(global_model, rank):
 
     for n_epi in range(max_train_ep):
         done = False
-        s = env.reset()
+        s, _ = env.reset()
         while not done:
             s_lst, a_lst, r_lst = [], [], []
             for t in range(update_interval):
                 prob = local_model.pi(torch.from_numpy(s).float())
                 m = Categorical(prob)
                 a = m.sample().item()
-                s_prime, r, done, info = env.step(a)
+                s_prime, r, terminated, truncated, info = env.step(a)
+                done = terminated or truncated
 
                 s_lst.append(s)
                 a_lst.append([a])
@@ -76,7 +81,7 @@ def train(global_model, rank):
                 td_target_lst.append([R])
             td_target_lst.reverse()
 
-            s_batch, a_batch, td_target = torch.tensor(s_lst, dtype=torch.float), torch.tensor(a_lst), \
+            s_batch, a_batch, td_target = torch.tensor(np.array(s_lst), dtype=torch.float), torch.tensor(a_lst), \
                 torch.tensor(td_target_lst)
             advantage = td_target - local_model.v(s_batch)
 
@@ -85,7 +90,11 @@ def train(global_model, rank):
             loss = -torch.log(pi_a) * advantage.detach() + \
                 F.smooth_l1_loss(local_model.v(s_batch), td_target.detach())
 
+            # NOTE: The original only called optimizer.zero_grad(), which clears the *global* model's grads. Since
+            # PyTorch 2.0 that sets them to None instead of zeroing the tensors in place, so the local model's grads
+            # (which the global params point at) were never cleared and kept accumulating. Clear them explicitly.
             optimizer.zero_grad()
+            local_model.zero_grad()
             loss.mean().backward()
             for global_param, local_param in zip(global_model.parameters(), local_model.parameters()):
                 global_param._grad = local_param.grad
@@ -95,29 +104,32 @@ def train(global_model, rank):
     env.close()
     print("Training process {} reached maximum episode.".format(rank))
 
-def play_game(model):
+def play_game(model, show_env):
     done = False
-    state = env.reset()    
-    while(not done):        
+    state, _ = show_env.reset()
+    while(not done):
         prob = model.pi(torch.from_numpy(state).float())
         m = Categorical(prob)
         a = m.sample().item()
-        s_prime, r, done, info = env.step(a)
-        env.render()
-        state = s_prime  
+        s_prime, r, terminated, truncated, info = show_env.step(a)
+        done = terminated or truncated
+        state = s_prime
 
 def test(global_model):
+    torch.set_num_threads(1)
     env = gym.make(environment)
+    show_env = gym.make(environment, render_mode='human')
     score = 0.0
     print_interval = 20
 
     for n_epi in range(max_test_ep):
         done = False
-        s = env.reset()
+        s, _ = env.reset()
         while not done:
             prob = global_model.pi(torch.from_numpy(s).float())
             a = Categorical(prob).sample().item()
-            s_prime, r, done, info = env.step(a)            
+            s_prime, r, terminated, truncated, info = env.step(a)
+            done = terminated or truncated
             s = s_prime
             score += r
                     
@@ -125,9 +137,10 @@ def test(global_model):
             print("# of episode :{}, avg score : {:.1f}".format(
                 n_epi, score/print_interval))
             score = 0.0
-            play_game(global_model)
+            play_game(global_model, show_env)
             time.sleep(1)
     env.close()
+    show_env.close()
 
 
 if __name__ == '__main__':    

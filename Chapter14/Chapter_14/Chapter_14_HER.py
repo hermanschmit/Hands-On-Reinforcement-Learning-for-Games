@@ -4,7 +4,6 @@
 import math
 import random
 
-import gym
 import numpy as np
 
 import torch
@@ -43,7 +42,9 @@ class Env(object):
         self.num_steps = 0
         self.state     = np.random.randint(2, size=self.num_bits)
         self.target    = np.random.randint(2, size=self.num_bits)
-        return self.state, self.target
+        # NOTE: step() flips bits of self.state in place, so returning self.state itself (as the original did) meant
+        # the first state stored in the replay buffer kept changing for the rest of the episode. Return a copy.
+        return np.copy(self.state), self.target
     
     def step(self, action):
         if self.done:
@@ -86,15 +87,18 @@ def get_action(model, state, goal, epsilon=0.1):
     q_value = model(state, goal)
     return q_value.max(1)[1].item()
 
-def plot(frame_idx, rewards, losses):    
-    plt.figure(figsize=(20,5))
+def plot(frame_idx, rewards, losses):
+    print('frame: %s, mean reward: %s' % (frame_idx, rewards[-1]))
+    # Redraw one window without blocking (the original opened a new figure in the blocking plt.show()).
+    plt.figure(1) if plt.fignum_exists(1) else plt.figure(1, figsize=(20,5))
+    plt.clf()
     plt.subplot(131)
     plt.title('Mean Reward: %s. frame: %s' % (rewards[-1], frame_idx))
     plt.plot(rewards)
     plt.subplot(132)
     plt.title('loss')
     plt.plot(losses)
-    plt.show()
+    plt.pause(0.001)
 
 def compute_td_error(batch_size):
     if batch_size > len(replay_buffer):
@@ -153,7 +157,7 @@ while frame_idx < max_frames:
     while not done:
         action = get_action(model, state, goal)
         next_state, reward, done, _ = env.step(action)
-        episode.append((state, reward, done, next_state, goal))
+        episode.append((state, action, reward, done, next_state, goal))
         replay_buffer.push(state, action, reward, next_state, done, goal)
         state = next_state
         total_reward += reward
@@ -165,7 +169,9 @@ while frame_idx < max_frames:
     all_rewards.append(total_reward)    
     
     new_episode = []
-    for state, reward, done, next_state, goal in episode:
+    # NOTE: The original episode tuples did not store the action, so every relabeled transition below was pushed with
+    # `action`, which at this point is the last action of the episode, rather than the action actually taken.
+    for state, action, reward, done, next_state, goal in episode:
         for t in np.random.choice(num_bits, new_goals):
             try:
                 episode[t]

@@ -1,5 +1,7 @@
 import argparse
+import os
 import random
+import tempfile
 
 import numpy as np
 import torch
@@ -10,7 +12,9 @@ from torchvision import transforms
 from torchvision.datasets import MNIST
 from tqdm import tqdm
 
-import learn2learn as l2l
+# NOTE: The original used learn2learn's MetaDataset/TaskGenerator and MAML; those APIs are gone from current
+# learn2learn, so minimal PyTorch versions are provided in meta_learning.py.
+from meta_learning import MAML, TaskGenerator
 
 
 class Net(nn.Module):
@@ -53,23 +57,26 @@ def compute_loss(task, device, learner, loss_func, batch=5):
     return loss, acc
 
 
+DEFAULT_DOWNLOAD = os.path.join(tempfile.gettempdir(), "mnist")
+
+
 def main(lr=0.005, maml_lr=0.01, iterations=1000, ways=5, shots=1, tps=32, fas=5, device=torch.device("cpu"),
-         download_location="/tmp/mnist"):
+         download_location=DEFAULT_DOWNLOAD):
     transformations = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,)),
         lambda x: x.view(1, 1, 28, 28),
     ])
 
-    mnist_train = l2l.data.MetaDataset(MNIST(download_location, train=True, download=True, transform=transformations))
+    mnist_train = MNIST(download_location, train=True, download=True, transform=transformations)
     # mnist_test = MNIST(file_location, train=False, download=True, transform=transformations)
 
-    train_gen = l2l.data.TaskGenerator(mnist_train, ways=ways, tasks=10000)
+    train_gen = TaskGenerator(mnist_train, ways=ways, shots=shots)
     # test_gen = l2l.data.TaskGenerator(mnist_test, ways=ways)
 
     model = Net(ways)
     model.to(device)
-    meta_model = l2l.algorithms.MAML(model, lr=maml_lr)
+    meta_model = MAML(model, lr=maml_lr)
     opt = optim.Adam(meta_model.parameters(), lr=lr)
     loss_func = nn.NLLLoss(reduction="sum")
 
@@ -128,8 +135,8 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=1, metavar='S',
                         help='random seed (default: 1)')
 
-    parser.add_argument('--download-location', type=str, default="/tmp/mnist", metavar='S',
-                        help='download location for train data (default : /tmp/mnist')
+    parser.add_argument('--download-location', type=str, default=DEFAULT_DOWNLOAD, metavar='S',
+                        help='download location for train data (default : %s)' % DEFAULT_DOWNLOAD)
 
     args = parser.parse_args()
 

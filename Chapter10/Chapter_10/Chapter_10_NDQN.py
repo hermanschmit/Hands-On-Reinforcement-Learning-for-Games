@@ -1,6 +1,6 @@
 import math, random
 
-import gym
+import gymnasium as gym
 import numpy as np
 
 import torch
@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from common.replay_buffer import PrioritizedReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 
-env_id = "LunarLander-v2"
+env_id = "LunarLander-v3"
 env = gym.make(env_id)
 writer = SummaryWriter()
 
@@ -81,7 +81,7 @@ class NoisyDQN(nn.Module):
         return x
     
     def act(self, state):
-        state   = autograd.Variable(torch.FloatTensor(state).unsqueeze(0), volatile=True)
+        state   = autograd.Variable(torch.FloatTensor(state).unsqueeze(0))
         q_value = self.forward(state)
         action  = q_value.max(1)[1].item()
         return action
@@ -153,18 +153,20 @@ losses = []
 all_rewards = []
 episode_reward = 0
 
-state = env.reset()
+state, _ = env.reset()
 for iteration in range(1, iterations + 1):
     action = current_model.act(state)
     
-    next_state, reward, done, _ = env.step(action)
+    next_state, reward, terminated, truncated, _ = env.step(action)
+    
+    done = terminated or truncated
     replay_buffer.push(state, action, reward, next_state, done)
     
     state = next_state
     episode_reward += reward
     
     if done:
-        state = env.reset()
+        state, _ = env.reset()
         all_rewards.append(episode_reward)
         episode_reward = 0
         

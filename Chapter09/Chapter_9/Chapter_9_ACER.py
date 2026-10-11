@@ -1,4 +1,5 @@
-import gym
+import gymnasium as gym
+import numpy as np
 import random
 import collections
 import torch
@@ -47,8 +48,8 @@ class ReplayBuffer():
                 is_first_lst.append(is_first)
                 is_first = False
 
-        s,a,r,prob,done_mask,is_first = torch.tensor(s_lst, dtype=torch.float), torch.tensor(a_lst), \
-                                        r_lst, torch.tensor(prob_lst, dtype=torch.float), done_lst, \
+        s,a,r,prob,done_mask,is_first = torch.tensor(np.array(s_lst), dtype=torch.float), torch.tensor(a_lst), \
+                                        r_lst, torch.tensor(np.array(prob_lst), dtype=torch.float), done_lst, \
                                         is_first_lst
         return s,a,r,prob,done_mask,is_first
     
@@ -109,7 +110,7 @@ def train(model, optimizer, memory, on_policy=False):
     optimizer.step()
         
 
-env = gym.make('LunarLander-v2')
+env = gym.make('LunarLander-v3')
 memory = ReplayBuffer()
 model = ActorCritic(env.observation_space.shape[0], env.action_space.n)
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -118,7 +119,7 @@ score = 0.0
 print_interval = 20    
 
 for n_epi in range(10000):
-    s = env.reset()
+    s, _ = env.reset()
     done = False
         
     while not done:
@@ -126,7 +127,8 @@ for n_epi in range(10000):
         for t in range(rollout_len): 
             prob = model.pi(torch.from_numpy(s).float())
             a = Categorical(prob).sample().item()
-            s_prime, r, done, info = env.step(a)
+            s_prime, r, terminated, truncated, info = env.step(a)
+            done = terminated or truncated
             seq_data.append((s, a, r/100.0, prob.detach().numpy(), done))
 
             score +=r

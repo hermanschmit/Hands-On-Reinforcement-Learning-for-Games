@@ -25,7 +25,7 @@ class OnPolicy(nn.Module):
         
     def act(self, x, deterministic=False):
         logit, value = self.forward(x)
-        probs = F.softmax(logit)
+        probs = F.softmax(logit, dim=1)
         
         if deterministic:
             action = probs.max(1)[1]
@@ -38,7 +38,7 @@ class OnPolicy(nn.Module):
         logit, value = self.forward(x)
         
         probs     = F.softmax(logit)
-        log_probs = F.log_softmax(logit)
+        log_probs = F.log_softmax(logit, dim=1)
         
         action_log_probs = log_probs.gather(1, action)
         entropy = -(probs * log_probs).sum(1).mean()
@@ -186,7 +186,7 @@ def main():
             rollout.insert(step, state, action.data, reward, masks)
 
 
-        _, next_value = actor_critic(autograd.Variable(rollout.states[-1], volatile=True))
+        _, next_value = actor_critic(autograd.Variable(rollout.states[-1]))
         next_value = next_value.data
 
         returns = rollout.compute_returns(next_value, gamma)
@@ -206,22 +206,24 @@ def main():
         optimizer.zero_grad()
         loss = value_loss * value_loss_coef + action_loss - entropy * entropy_coef
         loss.backward()
-        nn.utils.clip_grad_norm(actor_critic.parameters(), max_grad_norm)
+        nn.utils.clip_grad_norm_(actor_critic.parameters(), max_grad_norm)
         optimizer.step()
     
-        if i_update % num_frames == 0:
-            all_rewards.append(final_rewards.mean())
+        # NOTE: The original tested i_update % num_frames, which is only true on the first update, and then blocked
+        # training in plt.show(). Plot every 100 updates instead, redrawing one window without blocking.
+        if i_update % 100 == 0:
+            all_rewards.append(final_rewards.mean().item())
             all_losses.append(loss.item())
-        
-            #clear_output(True)
-            plt.figure(figsize=(20,5))
+
+            plt.figure(1) if plt.fignum_exists(1) else plt.figure(1, figsize=(20,5))
+            plt.clf()
             plt.subplot(131)
             plt.title('epoch %s. reward: %s' % (i_update, np.mean(all_rewards[-10:])))
             plt.plot(all_rewards)
             plt.subplot(132)
             plt.title('loss %s' % all_losses[-1])
             plt.plot(all_losses)
-            plt.show()
+            plt.pause(0.001)
         
         rollout.after_update()
 
@@ -230,12 +232,12 @@ def main():
     import time 
 
     def displayImage(image, step, reward):
-        #clear_output(True)
         s = "step: " + str(step) + " reward: " + str(reward)
-        plt.figure(figsize=(10,3))
+        plt.figure(2) if plt.fignum_exists(2) else plt.figure(2, figsize=(10,3))
+        plt.clf()
         plt.title(s)
         plt.imshow(image)
-        plt.show()
+        plt.pause(0.001)
         time.sleep(0.1)
 
     env = MiniPacman(mode, 1000)
@@ -252,7 +254,7 @@ def main():
         
         action = actor_critic.act(autograd.Variable(current_state))
     
-        next_state, reward, done, _ = env.step(action.data[0, 0])
+        next_state, reward, done, _ = env.step(action.item())
         total_reward += reward
         state = next_state
     

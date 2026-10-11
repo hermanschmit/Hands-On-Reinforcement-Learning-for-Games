@@ -17,9 +17,11 @@ from tqdm import tqdm
 #USE_CUDA = torch.cuda.is_available()
 #Variable = lambda *args, **kwargs: autograd.Variable(*args, **kwargs).cuda() if USE_CUDA else autograd.Variable(*args, **kwargs)
 
+# NOTE: The first two colors were swapped relative to Chapter_14_Imagination.py, which trains the environment model
+# (env_model_regular) with this mapping, so imagined frames were decoded with the wrong colors.
 pixels = (
-    (0.0, 1.0, 0.0), 
     (0.0, 1.0, 1.0),
+    (0.0, 1.0, 0.0), 
     (0.0, 0.0, 1.0),
     (1.0, 1.0, 1.0),
     (1.0, 1.0, 0.0), 
@@ -38,18 +40,18 @@ task_rewards = {
 }
 reward_to_onehot = {mode: {reward:i for i, reward in enumerate(task_rewards[mode])} for mode in task_rewards.keys()}
 
+# Each pixel channel is 0 or 1, so (r, g, b) -> 4r + 2g + b indexes a lookup table of class numbers.
+# (Vectorized: the original looped over every pixel in Python, which dominated the run time.)
+_code_to_class = np.full(8, -1, dtype=np.int64)
+for _i, (_r, _g, _b) in enumerate(pixels):
+    _code_to_class[int(4 * _r + 2 * _g + _b)] = _i
+
 def pix_to_target(next_states):
-    target = []
-    for pixel in next_states.transpose(0, 2, 3, 1).reshape(-1, 3):
-        target.append(pixel_to_onehot[tuple([np.round(pixel[0]), np.round(pixel[1]), np.round(pixel[2])])])
-    return target
+    pix = np.round(next_states.transpose(0, 2, 3, 1).reshape(-1, 3)).astype(np.int64)
+    return _code_to_class[4 * pix[:, 0] + 2 * pix[:, 1] + pix[:, 2]]
 
 def target_to_pix(imagined_states):
-    pixels = []
-    to_pixel = {value: key for key, value in pixel_to_onehot.items()}
-    for target in imagined_states:
-        pixels.append(list(to_pixel[target]))
-    return np.array(pixels)
+    return np.array(pixels)[imagined_states]
 
 def rewards_to_target(mode, rewards):
     target = []
@@ -183,12 +185,15 @@ class ImaginationCore(object):
         rollout_rewards = []
 
         if self.full_rollout:
-            state = state.unsqueeze(0).repeat(self.num_actions, 1, 1, 1, 1).view(-1, *self.in_shape)
+            # NOTE: The original repeated along a new first dimension (unsqueeze(0).repeat(num_actions, ...)), which orders
+            # the copies action-major, while the actions below and I2A's hidden.view(batch_size, -1) assume batch-major
+            # order. That paired states with the wrong actions and mixed different agents' imagined rollouts together.
+            state = state.unsqueeze(1).repeat(1, self.num_actions, 1, 1, 1).view(-1, *self.in_shape)
             action = torch.LongTensor([[i] for i in range(self.num_actions)]*batch_size)
             action = action.view(-1)
             rollout_batch_size = batch_size * self.num_actions
         else:
-            action = self.distil_policy.act(autograd.Variable(state, volatile=True))
+            action = self.distil_policy.act(autograd.Variable(state))
             action = action.data.cpu()
             rollout_batch_size = batch_size
 
@@ -197,10 +202,10 @@ class ImaginationCore(object):
             onehot_action[range(rollout_batch_size), action] = 1
             inputs = torch.cat([state, onehot_action], 1)
 
-            imagined_state, imagined_reward = self.env_model(autograd.Variable(inputs, volatile=True))
+            imagined_state, imagined_reward = self.env_model(autograd.Variable(inputs))
 
-            imagined_state  = F.softmax(imagined_state).max(1)[1].data.cpu()
-            imagined_reward = F.softmax(imagined_reward).max(1)[1].data.cpu()
+            imagined_state  = F.softmax(imagined_state, dim=1).max(1)[1].data.cpu()
+            imagined_reward = F.softmax(imagined_reward, dim=1).max(1)[1].data.cpu()
 
             imagined_state = target_to_pix(imagined_state.numpy())
             imagined_state = torch.FloatTensor(imagined_state).view(rollout_batch_size, *self.in_shape)
@@ -212,7 +217,7 @@ class ImaginationCore(object):
             rollout_rewards.append(onehot_reward.unsqueeze(0))
 
             state  = imagined_state
-            action = self.distil_policy.act(autograd.Variable(state, volatile=True))
+            action = self.distil_policy.act(autograd.Variable(state))
             action = action.data.cpu()
         
         return torch.cat(rollout_states), torch.cat(rollout_rewards)
@@ -292,7 +297,7 @@ def main():
             rollout.insert(step, current_state, action.data, reward, masks)
 
 
-        _, next_value = actor_critic(autograd.Variable(rollout.states[-1], volatile=True))
+        _, next_value = actor_critic(autograd.Variable(rollout.states[-1]))
         next_value = next_value.data
 
         returns = rollout.compute_returns(next_value, gamma)
@@ -307,7 +312,9 @@ def main():
             autograd.Variable(rollout.actions).view(-1, 1)
         )
         
-        distil_loss = 0.01 * (F.softmax(logit).detach() * F.log_softmax(distil_logit)).sum(1).mean()
+        # NOTE: The original was missing the minus sign, so it maximized the cross-entropy and pushed the distilled
+        # policy away from the I2A policy instead of towards it.
+        distil_loss = -0.01 * (F.softmax(logit, dim=1).detach() * F.log_softmax(distil_logit, dim=1)).sum(1).mean()
 
         values = values.view(num_steps, num_envs, 1)
         action_log_probs = action_log_probs.view(num_steps, num_envs, 1)
@@ -319,26 +326,29 @@ def main():
         optimizer.zero_grad()
         loss = value_loss * value_loss_coef + action_loss - entropy * entropy_coef
         loss.backward()
-        nn.utils.clip_grad_norm(actor_critic.parameters(), max_grad_norm)
+        nn.utils.clip_grad_norm_(actor_critic.parameters(), max_grad_norm)
         optimizer.step()
     
+        # NOTE: The original called optimizer.step() here, so the distilled policy was never trained and the I2A agent
+        # took a second step with the same gradients.
         distil_optimizer.zero_grad()
         distil_loss.backward()
-        optimizer.step()
+        distil_optimizer.step()
     
         if i_update % 100 == 0:
-            all_rewards.append(final_rewards.mean())
+            all_rewards.append(final_rewards.mean().item())
             all_losses.append(loss.item())
-        
-            #clear_output(True)
-            plt.figure(figsize=(20,5))
+
+            # Redraw one window without blocking (the original blocked training in plt.show()).
+            plt.figure(1) if plt.fignum_exists(1) else plt.figure(1, figsize=(20,5))
+            plt.clf()
             plt.subplot(131)
             plt.title('epoch %s. reward: %s' % (i_update, np.mean(all_rewards[-10:])))
             plt.plot(all_rewards)
             plt.subplot(132)
             plt.title('loss %s' % all_losses[-1])
             plt.plot(all_losses)
-            plt.show()
+            plt.pause(0.001)
         
         rollout.after_update()
 

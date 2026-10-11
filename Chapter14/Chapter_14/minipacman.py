@@ -1,5 +1,4 @@
-import gym
-from gym import spaces
+from gymnasium import spaces
 
 from deepmind import PillEater, observation_as_rgb
 

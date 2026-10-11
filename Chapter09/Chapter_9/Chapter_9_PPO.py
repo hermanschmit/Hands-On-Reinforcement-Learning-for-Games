@@ -1,4 +1,5 @@
-import gym
+import gymnasium as gym
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -50,8 +51,8 @@ class PPO(nn.Module):
             done_mask = 0 if done else 1
             done_lst.append([done_mask])
             
-        s,a,r,s_prime,done_mask, prob_a = torch.tensor(s_lst, dtype=torch.float), torch.tensor(a_lst), \
-                                          torch.tensor(r_lst), torch.tensor(s_prime_lst, dtype=torch.float), \
+        s,a,r,s_prime,done_mask, prob_a = torch.tensor(np.array(s_lst), dtype=torch.float), torch.tensor(a_lst), \
+                                          torch.tensor(r_lst), torch.tensor(np.array(s_prime_lst), dtype=torch.float), \
                                           torch.tensor(done_lst, dtype=torch.float), torch.tensor(prob_a_lst)
         self.data = []
         return s, a, r, s_prime, done_mask, prob_a
@@ -85,40 +86,43 @@ class PPO(nn.Module):
             self.optimizer.step()
             
 
-env = gym.make('LunarLander-v2')
+env = gym.make('LunarLander-v3')
+show_env = gym.make('LunarLander-v3', render_mode='human')
 model = PPO(env.observation_space.shape[0], env.action_space.n)
 score = 0.0
 print_interval = 20
 iterations = 10000
 min_play_reward = 50
+play_every = 25
 
 def play_game():
     done = False
-    state = env.reset()    
-    while(not done):        
-        prob = model.pi(torch.from_numpy(s).float())
+    state, _ = show_env.reset()
+    while(not done):
+        prob = model.pi(torch.from_numpy(state).float())
         m = Categorical(prob)
         a = m.sample().item()
-        s_prime, r, done, info = env.step(a)
-        env.render()
-        state = s_prime  
+        s_prime, r, terminated, truncated, info = show_env.step(a)
+        done = terminated or truncated
+        state = s_prime
 
 for iteration in range(iterations):
-    s = env.reset()
+    s, _ = env.reset()
     done = False
     while not done:
         for t in range(T_horizon):
             prob = model.pi(torch.from_numpy(s).float())            
             m = Categorical(prob)
             a = m.sample().item()
-            s_prime, r, done, info = env.step(a)
+            s_prime, r, terminated, truncated, info = env.step(a)
+            done = terminated or truncated
 
             model.put_data((s, a, r/100.0, s_prime, prob[a].item(), done))
             s = s_prime
 
             score += r
             if done:
-                if score/print_interval > min_play_reward:
+                if score/print_interval > min_play_reward and iteration % play_every == 0:
                     play_game()
                 break
 

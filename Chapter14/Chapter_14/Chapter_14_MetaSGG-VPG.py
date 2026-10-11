@@ -6,33 +6,33 @@ Trains a 2-layer MLP with MetaSGD-VPG.
 
 import random
 
-import cherry as ch
-import gym
 import numpy as np
 import torch as th
-from cherry.algorithms import a2c
-from cherry.models.robotics import LinearValue
 from torch import optim
 from tqdm import tqdm
 
-import learn2learn as l2l
+# NOTE: The original used learn2learn (MAML/MetaSGD, the Particles2D environment) and cherry (episode collection,
+# baseline, advantages). Their current releases no longer support this code, so minimal PyTorch versions of the
+# same pieces are provided in meta_learning.py.
+from meta_learning import MetaSGD, LinearValue, Particles2DEnv, discount, generalized_advantage, magic_box, \
+    normalize, policy_loss, run_episodes
 from policies import DiagNormalPolicy
 
 
 def compute_advantages(baseline, tau, gamma, rewards, dones, states, next_states):
     # Update baseline
-    returns = ch.td.discount(gamma, rewards, dones)
+    returns = discount(gamma, rewards, dones)
     baseline.fit(states, returns)
     values = baseline(states)
     next_values = baseline(next_states)
     bootstraps = values * (1.0 - dones) + next_values * dones
     next_value = th.zeros(1, device=values.device)
-    return ch.pg.generalized_advantage(tau=tau,
-                                       gamma=gamma,
-                                       rewards=rewards,
-                                       dones=dones,
-                                       values=bootstraps,
-                                       next_value=next_value)
+    return generalized_advantage(tau=tau,
+                                 gamma=gamma,
+                                 rewards=rewards,
+                                 dones=dones,
+                                 values=bootstraps,
+                                 next_value=next_value)
 
 
 def maml_a2c_loss(train_episodes, learner, baseline, gamma, tau):
@@ -45,8 +45,8 @@ def maml_a2c_loss(train_episodes, learner, baseline, gamma, tau):
     log_probs = learner.log_prob(states, actions)
     advantages = compute_advantages(baseline, tau, gamma, rewards,
                                     dones, states, next_states)
-    advantages = ch.normalize(advantages).detach()
-    return a2c.policy_loss(log_probs, advantages)
+    advantages = normalize(advantages).detach()
+    return policy_loss(log_probs, advantages)
 
 
 def main(
@@ -60,23 +60,24 @@ def main(
         adapt_bsz=20,
         tau=1.00,
         gamma=0.99,
-        num_workers=2,
         seed=42,
 ):
     random.seed(seed)
     np.random.seed(seed)
     th.manual_seed(seed)
 
-    def make_env():
-        return gym.make(env_name)
-
-    env = l2l.gym.AsyncVectorEnv([make_env for _ in range(num_workers)])
-    env.seed(seed)
-    env = ch.envs.Torch(env)
+    # NOTE: The original vectorized the environment with learn2learn's AsyncVectorEnv; a single environment is
+    # plenty for this tiny task.
+    env = Particles2DEnv()
     policy = DiagNormalPolicy(env.state_size, env.action_size)
-    meta_learner = l2l.algorithms.MetaSGD(policy, lr=meta_lr)
-    baseline = LinearValue(env.state_size, env.action_size)
-    opt = optim.Adam(policy.parameters(), lr=meta_lr)
+    # NOTE: The original passed meta_lr as the adaptation step size, leaving adapt_lr unused.
+    # The optimizer also has to include meta_learner.parameters(), which hold Meta-SGD's learned per-parameter
+    # step sizes; the original only optimized policy.parameters(), so the step sizes never changed.
+    meta_learner = MetaSGD(policy, lr=adapt_lr)
+    # NOTE: The original passed env.action_size as LinearValue's second argument, which is its regularization
+    # coefficient, not a size.
+    baseline = LinearValue(env.state_size)
+    opt = optim.Adam(meta_learner.parameters(), lr=meta_lr)
     all_rewards = []
 
     for iteration in range(num_iterations):
@@ -86,16 +87,15 @@ def main(
             learner = meta_learner.clone()
             env.set_task(task_config)
             env.reset()
-            task = ch.envs.Runner(env)
 
             # Fast Adapt
             for step in range(adapt_steps):
-                train_episodes = task.run(learner, episodes=adapt_bsz)
+                train_episodes = run_episodes(env, learner, episodes=adapt_bsz)
                 loss = maml_a2c_loss(train_episodes, learner, baseline, gamma, tau)
                 learner.adapt(loss)
 
             # Compute Validation Loss
-            valid_episodes = task.run(learner, episodes=adapt_bsz)
+            valid_episodes = run_episodes(env, learner, episodes=adapt_bsz)
             loss = maml_a2c_loss(valid_episodes, learner, baseline, gamma, tau)
             iteration_loss += loss
             iteration_reward += valid_episodes.reward().sum().item() / adapt_bsz

@@ -37,18 +37,18 @@ mode_rewards = {
 }
 reward_to_categorical = {mode: {reward:i for i, reward in enumerate(mode_rewards[mode])} for mode in mode_rewards.keys()}
 
+# Each pixel channel is 0 or 1, so (r, g, b) -> 4r + 2g + b indexes a lookup table of class numbers.
+# (Vectorized: the original looped over every pixel in Python, which dominated the run time.)
+_code_to_class = np.full(8, -1, dtype=np.int64)
+for _i, (_r, _g, _b) in enumerate(pixels):
+    _code_to_class[int(4 * _r + 2 * _g + _b)] = _i
+
 def pix_to_target(next_states):
-    target = []
-    for pixel in next_states.transpose(0, 2, 3, 1).reshape(-1, 3):
-        target.append(pixel_to_categorical[tuple([np.ceil(pixel[0]), np.ceil(pixel[1]), np.ceil(pixel[2])])])
-    return target
+    pix = np.ceil(next_states.transpose(0, 2, 3, 1).reshape(-1, 3)).astype(np.int64)
+    return _code_to_class[4 * pix[:, 0] + 2 * pix[:, 1] + pix[:, 2]]
 
 def target_to_pix(imagined_states):
-    pixels = []
-    to_pixel = {value: key for key, value in pixel_to_categorical.items()}
-    for target in imagined_states:
-        pixels.append(list(to_pixel[target]))
-    return np.array(pixels)
+    return np.array(pixels)[imagined_states]
 
 def rewards_to_target(mode, rewards):
     target = []
@@ -57,12 +57,13 @@ def rewards_to_target(mode, rewards):
     return target
 
 def plot(frame_idx, rewards, losses):
-    #clear_output(True)
-    plt.figure(figsize=(20,5))
+    # Redraw one window without blocking (the original opened a new figure in the blocking plt.show()).
+    plt.figure(1) if plt.fignum_exists(1) else plt.figure(1, figsize=(20,5))
+    plt.clf()
     plt.subplot(131)
     plt.title('loss %s' % losses[-1])
     plt.plot(losses)
-    plt.show()
+    plt.pause(0.001)
     
 def displayImage(image, step, reward):
     s = str(step) + " " + str(reward)
@@ -188,7 +189,7 @@ def main():
         else:
             state = torch.FloatTensor(np.float32(state)).unsqueeze(0)
         
-        action = actor_critic.act(autograd.Variable(state, volatile=True))
+        action = actor_critic.act(autograd.Variable(state))
         action = action.data.cpu().squeeze(1).numpy()
         return action
 
@@ -240,7 +241,8 @@ def main():
         losses.append(loss.item())
         all_rewards.append(np.mean(rewards))
     
-        if frame_idx % num_updates == 0:
+        # NOTE: The original tested frame_idx % num_updates, which is only true on the first frame.
+        if frame_idx % 100 == 0:
             plot(frame_idx, all_rewards, losses)
 
     torch.save(env_model.state_dict(), "env_model_" + mode)
@@ -269,7 +271,7 @@ def main():
         #    inputs = inputs.cuda()
 
         imagined_state, imagined_reward = env_model(inputs)
-        imagined_state = F.softmax(imagined_state)
+        imagined_state = F.softmax(imagined_state, dim=1)
         iss.append(imagined_state)
     
         next_state, reward, done, _ = env.step(actions[0])
@@ -280,15 +282,15 @@ def main():
         imagined_image = imagined_image.reshape(15, 19, 3)
         state_image = torch.FloatTensor(next_state).permute(1, 2, 0).cpu().numpy()
     
-        #clear_output()
-        plt.figure(figsize=(10,3))
+        plt.figure(2) if plt.fignum_exists(2) else plt.figure(2, figsize=(10,3))
+        plt.clf()
         plt.subplot(131)
         plt.title("Imagined")
         plt.imshow(imagined_image)
         plt.subplot(132)
         plt.title("Actual")
         plt.imshow(state_image)
-        plt.show()
+        plt.pause(0.001)
         time.sleep(0.3)
     
         if steps > 30:

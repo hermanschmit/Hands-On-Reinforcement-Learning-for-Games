@@ -203,6 +203,10 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(env_model.parameters())
 
+    # This is an unfinished draft of Chapter_14_Imagination.py (which has the training loop). Shut the worker
+    # processes down cleanly instead of leaving them to crash when the program exits.
+    envs.close()
+
 #if USE_CUDA:
 #    env_model    = env_model.cuda()
 #    actor_critic = actor_critic.cuda()
